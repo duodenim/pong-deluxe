@@ -1,0 +1,16 @@
+[package]
+name = "pong-deluxe"
+version = "0.1.0"
+authors = ["Joseph Schulte <schulteajoseph@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+specs = "0.14.3"
+specs-derive = "0.4.0"
+ash = "0.27.1"
+byteorder = "1.3.1"
+sdl2 = "0.32.1"
+# - Use repos that have ash at latest until crates.io is updated
+vk-mem = { git = "https://github.com/afpatmin/vk-mem-rs" }
+rayon = "1.0.3"
+num_cpus = "1.10.0"
