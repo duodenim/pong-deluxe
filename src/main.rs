@@ -1,25 +1,13 @@
-
-extern crate specs;
 use specs::{Component, VecStorage, NullStorage, World, Builder, System, Read, ReadStorage, WriteStorage, DispatcherBuilder};
-
-#[macro_use]
-extern crate specs_derive;
-
-extern crate num_cpus;
-extern crate rayon;
-
-#[macro_use]
-extern crate ash;
-
-extern crate byteorder;
-
-extern crate sdl2;
+use specs_derive::{Component};
 
 mod render;
 use render::RenderComponent;
 mod fy_math;
 use fy_math::{Vec2,TransformComponent};
 
+#[derive(Component)]
+#[storage(VecStorage)]
 struct PhysicsComponent {
     x: f32,
     y: f32
@@ -37,10 +25,6 @@ struct Paddle {
 
 #[derive(Default)]
 struct Time(f32);
-
-impl Component for PhysicsComponent {
-    type Storage = VecStorage<Self>;
-}
 
 struct PhysicsSystem;
 

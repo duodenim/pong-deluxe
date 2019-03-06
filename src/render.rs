@@ -1,18 +1,14 @@
-use ash::Entry;
-use ash::vk;
-use ash::version::EntryV1_0;
-use ash::version::InstanceV1_0;
-use ash::version::DeviceV1_0;
+use ash::{Entry, vk};
+use ash::version::{EntryV1_0, InstanceV1_0, DeviceV1_0};
 use ash::extensions::ext::DebugReport;
-use ash::extensions::khr::Swapchain;
-use ash::extensions::khr::Surface;
+use ash::extensions::khr::{Swapchain, Surface};
 use ash::vk::Handle;
-use std::ffi::CString;
-use std::ffi::CStr;
-use std::os::raw::c_char;
-use std::os::raw::c_void;
+use ash::vk_make_version;
+use std::ffi::{CString, CStr};
+use std::os::raw::{c_char, c_void};
 
 use specs::{Builder, Component, NullStorage, System, Read, ReadStorage, WriteStorage, DispatcherBuilder};
+use specs_derive::{Component};
 
 use byteorder::{NativeEndian, ByteOrder};
 

@@ -1,4 +1,5 @@
 use specs::{Component, DenseVecStorage};
+use specs_derive::{Component};
 
 #[derive(Default)]
 pub struct Vec2 {
