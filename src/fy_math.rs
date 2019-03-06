@@ -24,10 +24,10 @@ pub struct Mat4 {
 }
 
 impl Vec2 {
-    pub fn new() -> Vec2 {
+    pub fn new(x: f32, y: f32) -> Vec2 {
         Vec2 {
-            x: 0.0,
-            y: 0.0
+            x,
+            y
         }
     }
 }

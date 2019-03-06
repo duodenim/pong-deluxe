@@ -9,8 +9,7 @@ use fy_math::{Vec2,TransformComponent};
 #[derive(Component)]
 #[storage(VecStorage)]
 struct PhysicsComponent {
-    x: f32,
-    y: f32
+    velocity: Vec2
 }
 
 #[derive(Component, Default)]
@@ -24,34 +23,41 @@ struct Paddle {
 }
 
 #[derive(Default)]
-struct Time(f32);
+struct DeltaTime(f32);
+
+#[derive(Default)]
+struct TotalTime(f32);
 
 struct PhysicsSystem;
 
 impl<'a> System<'a> for PhysicsSystem {
-    type SystemData = (Read<'a, Time>, WriteStorage<'a, PhysicsComponent>);
+    type SystemData = (Read<'a, DeltaTime>, Read<'a, TotalTime>, WriteStorage<'a, PhysicsComponent>, WriteStorage<'a, TransformComponent>);
 
-    fn run(&mut self, (time, mut phys_c): Self::SystemData) {
+    fn run(&mut self, (dt, time, mut phys_storage, mut t_storage): Self::SystemData) {
         use specs::Join;
 
-        for p in (&mut phys_c).join() {
-            p.y = time.0.sin();
+        for (p, t) in (&mut phys_storage, &mut t_storage).join() {
+            if t.position.x > 1.0 || t.position.x < -1.0 {
+                p.velocity.x *= -1.0;
+            }
+            if t.position.y > 1.0 || t.position.y < -1.0 {
+                p.velocity.y *= -1.0;
+            }
+
+            t.position.x += p.velocity.x * dt.0;
+            t.position.y += p.velocity.y * dt.0;
         }
     }
 }
 
-struct BallSystem;
+struct UpdateBall;
 
-impl<'a> System<'a> for BallSystem {
-    type SystemData = (ReadStorage<'a, Ball>, WriteStorage<'a, TransformComponent>, Read<'a, Time>);
+impl<'a> System<'a> for UpdateBall {
+    type SystemData = (ReadStorage<'a, Ball>, WriteStorage<'a, TransformComponent>);
 
-    fn run(&mut self, (ball_storage, mut transform_storage, time): Self::SystemData) {
+    fn run(&mut self, (ball_storage, mut transform_storage): Self::SystemData) {
         use specs::Join;
-
-        let time = time.0;
-        for (_, t) in (&ball_storage, &mut transform_storage).join() {
-            t.position.x = time.sin();
-            t.position.y = 0.0;
+        for (_, _t) in (&ball_storage, &mut transform_storage).join() {
         }
     }
 }
@@ -59,13 +65,13 @@ impl<'a> System<'a> for BallSystem {
 struct UpdatePaddles;
 
 impl<'a> System<'a> for UpdatePaddles {
-    type SystemData = (ReadStorage<'a, Paddle>, ReadStorage<'a, PhysicsComponent>);
+    type SystemData = (ReadStorage<'a, Paddle>, ReadStorage<'a, TransformComponent>);
 
-    fn run(&mut self, (paddle_storage, physics_storage): Self::SystemData) {
+    fn run(&mut self, (paddle_storage, transform_storage): Self::SystemData) {
         use specs::Join;
 
-        for (paddles, physics) in (&paddle_storage, &physics_storage).join() {
-            println!("Paddle player index: {} is at position ( {}, {} )", paddles.player_idx, physics.x, physics.y);
+        for (paddles, t) in (&paddle_storage, &transform_storage).join() {
+            
         }
     }
 }
@@ -79,36 +85,40 @@ fn main() {
     world.register::<TransformComponent>();
 
     let _paddle1 = {
-        let pos = PhysicsComponent {
-            x: 1.0,
-            y: 0.0
+        let transform = TransformComponent {
+            position: Vec2::new(0.9, 0.0)
+        };
+        let physics = PhysicsComponent {
+            velocity: Vec2::new(-0.6, 1.3)
         };
         let paddle = Paddle {
             player_idx: 0
         };
-        world.create_entity().with(pos).with(paddle).build()
+        world.create_entity().with(transform).with(paddle).with(RenderComponent).with(physics).build()
     };
 
     let _paddle2 = {
-        let pos = PhysicsComponent {
-            x: -1.0,
-            y: 0.0
+        let transform = TransformComponent {
+            position: Vec2::new(-0.9, 0.0)
+        };
+        let physics = PhysicsComponent {
+            velocity: Vec2::new(-0.9, 0.05)
         };
 
         let paddle = Paddle {
             player_idx: 1
         };
-        world.create_entity().with(pos).with(paddle).build()
+        world.create_entity().with(transform).with(paddle).with(RenderComponent).with(physics).build()
     };
 
     let _ball = {
         let transform = TransformComponent {
-            position: Vec2 {
-                x: 0.5,
-                y: 0.0
-            }
+            position: Vec2::new(0.0, 0.0)
         };
-        world.create_entity().with(RenderComponent).with(Ball).with(transform).build();
+        let physics = PhysicsComponent {
+            velocity: Vec2::new(0.5, 0.4)
+        };
+        world.create_entity().with(RenderComponent).with(Ball).with(transform).with(physics).build();
     };
 
     let sdl_context = sdl2::init().unwrap();
@@ -118,7 +128,8 @@ fn main() {
 
     let renderer = render::RenderContext::new(&window, 640, 480);
 
-    world.add_resource(Time(0.0));
+    world.add_resource(DeltaTime(0.01));
+    world.add_resource(TotalTime(0.0));
 
     let num_threads = num_cpus::get();
     let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(num_threads).build().unwrap();
@@ -126,7 +137,7 @@ fn main() {
 
     let mut dispatcher = DispatcherBuilder::new()
         .with(PhysicsSystem, "physics", &[])
-        .with(BallSystem, "ball", &["physics"])
+        .with(UpdateBall, "ball", &["physics"])
         .with(UpdatePaddles, "paddles", &["physics"])
         .with(renderer, "rendering", &["ball", "paddles"])
         .with_pool(thread_pool)
@@ -141,9 +152,11 @@ fn main() {
                 _ => {}
             }
         }
-        let mut time = world.write_resource::<Time>();
-        *time = Time(time.0 + 0.01);
+        let mut time = world.write_resource::<TotalTime>();
+        let dt = world.read_resource::<DeltaTime>();
+        time.0 += dt.0;
         drop(time);
+        drop(dt);
         dispatcher.dispatch(&mut world.res);
         world.maintain();
     }
