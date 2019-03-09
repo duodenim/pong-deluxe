@@ -126,14 +126,14 @@ fn main() {
     let mut events = sdl_context.event_pump().unwrap();
     let window = video_context.window("Pong2", 640, 480).vulkan().build().unwrap();
 
-    let renderer = render::RenderContext::new(&window, 640, 480);
-
     world.add_resource(DeltaTime(0.01));
     world.add_resource(TotalTime(0.0));
 
     let num_threads = num_cpus::get();
     let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(num_threads).build().unwrap();
     let thread_pool = std::sync::Arc::new(thread_pool);
+
+    let renderer = render::RenderContext::new(&window, 640, 480, thread_pool.clone(), num_threads);
 
     let mut dispatcher = DispatcherBuilder::new()
         .with(PhysicsSystem, "physics", &[])

@@ -26,11 +26,14 @@ pub struct RenderContext {
     sc_image_ready_sem: vk::Semaphore,
     render_finished_sem: vk::Semaphore,
     graphics_command_buffer: vk::CommandBuffer,
+    sub_command_pools: std::vec::Vec<vk::CommandPool>,
+    sub_command_buffers: std::vec::Vec<vk::CommandBuffer>,
     framebuffers: std::vec::Vec<vk::Framebuffer>,
     render_pass: vk::RenderPass,
     graphics_pipeline: vk::Pipeline,
     pipeline_layout: vk::PipelineLayout,
-    render_area: vk::Rect2D
+    render_area: vk::Rect2D,
+    thread_pool: std::sync::Arc<rayon::ThreadPool>
 }
 
 #[derive(Component, Default)]
@@ -54,7 +57,7 @@ unsafe extern "system" fn vulkan_debug_callback(
 }
 
 impl RenderContext {
-    pub fn new(window: &sdl2::video::Window, window_size_x: u32, window_size_y: u32) -> RenderContext {
+    pub fn new(window: &sdl2::video::Window, window_size_x: u32, window_size_y: u32, thread_pool: std::sync::Arc<rayon::ThreadPool>, num_threads: usize) -> RenderContext {
         let sdl_vk_exts = window.vulkan_instance_extensions().unwrap();
         let entry = Entry::new().unwrap();
 
@@ -156,6 +159,20 @@ impl RenderContext {
             unsafe { device.create_command_pool(&create_info, None).unwrap() }
         };
 
+        let sub_command_pools = {
+            let mut ret = Vec::new();
+            let pool_create = vk::CommandPoolCreateInfo::builder()
+                .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
+                .queue_family_index(graphics_queue_family_index);
+
+            for _ in 0..num_threads {
+                let pool = unsafe { device.create_command_pool(&pool_create, None).unwrap() };
+                ret.push(pool);
+            }
+
+            ret
+        };
+
         let swapchain_ext = Swapchain::new(&instance, &device);
 
         let swapchain = {
@@ -170,7 +187,7 @@ impl RenderContext {
                 .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
                 .pre_transform(vk::SurfaceTransformFlagsKHR::IDENTITY)
                 .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
-                .present_mode(vk::PresentModeKHR::FIFO) //FIFO is guaranteed to be available
+                .present_mode(vk::PresentModeKHR::MAILBOX) //FIFO is guaranteed to be available
                 .clipped(true);
             unsafe { swapchain_ext.create_swapchain(&create_info, None).unwrap() }
         };
@@ -403,6 +420,21 @@ impl RenderContext {
             buffers[0]
         };
 
+        let sub_command_buffers = {
+            let mut ret = Vec::new();
+
+            for thread_idx in 0..num_threads {
+                let alloc_info = vk::CommandBufferAllocateInfo::builder()
+                    .command_pool(sub_command_pools[thread_idx])
+                    .level(vk::CommandBufferLevel::SECONDARY)
+                    .command_buffer_count(1);
+
+                let buffers = unsafe { device.allocate_command_buffers(&alloc_info).unwrap() };
+                ret.push(buffers[0]);
+            }
+            ret
+        };
+
         let (sc_image_ready_sem, render_finished_sem) = {
             let create_info = vk::SemaphoreCreateInfo::builder().build();
             unsafe { (device.create_semaphore(&create_info, None).unwrap(), device.create_semaphore(&create_info, None).unwrap()) }
@@ -425,11 +457,14 @@ impl RenderContext {
             sc_image_ready_sem,
             render_finished_sem,
             graphics_command_buffer,
+            sub_command_buffers,
+            sub_command_pools,
             framebuffers,
             render_pass,
             graphics_pipeline,
             render_area,
-            pipeline_layout
+            pipeline_layout,
+            thread_pool
         }
     }
 }
@@ -438,30 +473,36 @@ impl <'a> System<'a> for RenderContext {
     type SystemData = (ReadStorage<'a, RenderComponent>, ReadStorage<'a, TransformComponent>);
 
     fn run (&mut self, (render_storage, transform_storage): Self::SystemData) {
-        use specs::Join;
+        use specs::ParJoin;
+        use rayon::prelude::*;
 
         unsafe { self.device.device_wait_idle().unwrap() };
 
         let (fb_idx, _) = unsafe { self.swapchain_ext.acquire_next_image(self.swapchain, std::u64::MAX, self.sc_image_ready_sem, vk::Fence::null()).unwrap() };
-        let begin_info = vk::CommandBufferBeginInfo::builder()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
-            .build();
-        unsafe { self.device.begin_command_buffer(self.graphics_command_buffer, &begin_info).unwrap() };
-        let clear_value = vk::ClearColorValue { float32: [0.0, 0.0, 0.0, 1.0]};
-        let clear_value = [vk::ClearValue { color: clear_value}];
-        let rp_begin_info = vk::RenderPassBeginInfo::builder()
-            .render_pass(self.render_pass)
-            .framebuffer(self.framebuffers[fb_idx as usize])
-            .render_area(self.render_area)
-            .clear_values(&clear_value)
-            .build();
 
-        unsafe {
-            self.device.cmd_begin_render_pass(self.graphics_command_buffer, &rp_begin_info, vk::SubpassContents::INLINE); 
+        for sub_cmd_bfr in self.sub_command_buffers.iter() {
+            let inheritance_info = vk::CommandBufferInheritanceInfo::builder()
+                .render_pass(self.render_pass)
+                .subpass(0)
+                .framebuffer(self.framebuffers[fb_idx as usize]);
+
+            let begin_info = vk::CommandBufferBeginInfo::builder()
+                .inheritance_info(&inheritance_info)
+                .flags(vk::CommandBufferUsageFlags::RENDER_PASS_CONTINUE);
+
+            unsafe { self.device.begin_command_buffer(*sub_cmd_bfr, &begin_info).unwrap(); }
         }
 
-        
-        for (_renderable, transform) in (&render_storage, &transform_storage).join() {
+        (&render_storage, &transform_storage).par_join().for_each(|(_, transform)| {
+            let idx = match self.thread_pool.current_thread_index() {
+                None => {
+                    panic!("Rendering operations occured outside thread pool!");
+                },
+                Some(idx) => {
+                    idx
+                }
+            };
+
             let position = &transform.position;
             let x = Vec4 {
                 x: 1.0,
@@ -497,13 +538,31 @@ impl <'a> System<'a> for RenderContext {
             unsafe {
                 let ptr = &m as *const Mat4;
                 let slice = std::slice::from_raw_parts(ptr as *const u8, PUSH_CONSTANT_SIZE as usize);
-                self.device.cmd_push_constants(self.graphics_command_buffer, self.pipeline_layout, vk::ShaderStageFlags::VERTEX, 0, &slice);
-                self.device.cmd_bind_pipeline(self.graphics_command_buffer, vk::PipelineBindPoint::GRAPHICS, self.graphics_pipeline);
-                self.device.cmd_draw(self.graphics_command_buffer, 1, 1, 0, 0);
+                self.device.cmd_bind_pipeline(self.sub_command_buffers[idx], vk::PipelineBindPoint::GRAPHICS, self.graphics_pipeline);
+                self.device.cmd_push_constants(self.sub_command_buffers[idx], self.pipeline_layout, vk::ShaderStageFlags::VERTEX, 0, &slice);
+                self.device.cmd_draw(self.sub_command_buffers[idx], 1, 1, 0, 0);
             }
+        });
+
+        for sub_cmd_bfr in self.sub_command_buffers.iter() {
+            unsafe { self.device.end_command_buffer(*sub_cmd_bfr).unwrap(); }
         }
+        let begin_info = vk::CommandBufferBeginInfo::builder()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
+            .build();
+        unsafe { self.device.begin_command_buffer(self.graphics_command_buffer, &begin_info).unwrap() };
+        let clear_value = vk::ClearColorValue { float32: [0.0, 0.0, 0.0, 1.0]};
+        let clear_value = [vk::ClearValue { color: clear_value}];
+        let rp_begin_info = vk::RenderPassBeginInfo::builder()
+            .render_pass(self.render_pass)
+            .framebuffer(self.framebuffers[fb_idx as usize])
+            .render_area(self.render_area)
+            .clear_values(&clear_value)
+            .build();
 
         unsafe {
+            self.device.cmd_begin_render_pass(self.graphics_command_buffer, &rp_begin_info, vk::SubpassContents::SECONDARY_COMMAND_BUFFERS); 
+            self.device.cmd_execute_commands(self.graphics_command_buffer, self.sub_command_buffers.as_slice());
             self.device.cmd_end_render_pass(self.graphics_command_buffer);
             self.device.end_command_buffer(self.graphics_command_buffer).unwrap();
         }
