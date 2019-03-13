@@ -122,6 +122,24 @@ fn main() {
     };
 
     let sdl_context = sdl2::init().unwrap();
+
+    //Print off information about connected controllers
+    let controller_system = sdl_context.game_controller().unwrap();
+
+    let num_sticks = controller_system.num_joysticks().unwrap();
+    println!("{} game controllers are connected", num_sticks);
+
+    let mut controllers = Vec::new();
+    for i in 0..num_sticks {
+        let name = controller_system.name_for_index(i).unwrap();
+        println!("{}", name);
+        if controller_system.is_game_controller(i) {
+            let mut c = controller_system.open(i).unwrap();
+            c.set_rumble(0xffff, 0xffff, 300).unwrap();
+            controllers.push(c);
+            
+        }
+    }
     let video_context = sdl_context.video().unwrap();
     let mut events = sdl_context.event_pump().unwrap();
     let window = video_context.window("Pong2", 640, 480).vulkan().build().unwrap();
@@ -151,6 +169,11 @@ fn main() {
                 },
                 _ => {}
             }
+        }
+        for controller in controllers.iter() {
+            let name = controller.name();
+            let x = controller.axis(sdl2::controller::Axis::LeftX);
+            println!("{}, -> {}", name, x);
         }
         let mut time = world.write_resource::<TotalTime>();
         let dt = world.read_resource::<DeltaTime>();
