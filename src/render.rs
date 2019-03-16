@@ -187,7 +187,7 @@ impl RenderContext {
                 .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
                 .pre_transform(vk::SurfaceTransformFlagsKHR::IDENTITY)
                 .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
-                .present_mode(vk::PresentModeKHR::MAILBOX) //FIFO is guaranteed to be available
+                .present_mode(vk::PresentModeKHR::FIFO) //FIFO is guaranteed to be available
                 .clipped(true);
             unsafe { swapchain_ext.create_swapchain(&create_info, None).unwrap() }
         };

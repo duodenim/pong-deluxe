@@ -6,6 +6,8 @@ use render::RenderComponent;
 mod fy_math;
 use fy_math::{Vec2,TransformComponent};
 
+const AXIS_MAX: f32 = 32768.0;
+
 #[derive(Component)]
 #[storage(VecStorage)]
 struct PhysicsComponent {
@@ -28,36 +30,38 @@ struct DeltaTime(f32);
 #[derive(Default)]
 struct TotalTime(f32);
 
+struct ControllerState {
+    left_axis_x: f32,
+    left_axis_y: f32
+}
+
+#[derive(Default)]
+struct Controllers(std::vec::Vec<ControllerState>);
+
 struct PhysicsSystem;
 
 impl<'a> System<'a> for PhysicsSystem {
     type SystemData = (Read<'a, DeltaTime>, Read<'a, TotalTime>, WriteStorage<'a, PhysicsComponent>, WriteStorage<'a, TransformComponent>);
 
-    fn run(&mut self, (dt, time, mut phys_storage, mut t_storage): Self::SystemData) {
-        use specs::Join;
-
-        for (p, t) in (&mut phys_storage, &mut t_storage).join() {
-            if t.position.x > 1.0 || t.position.x < -1.0 {
-                p.velocity.x *= -1.0;
-            }
-            if t.position.y > 1.0 || t.position.y < -1.0 {
-                p.velocity.y *= -1.0;
-            }
-
-            t.position.x += p.velocity.x * dt.0;
-            t.position.y += p.velocity.y * dt.0;
-        }
+    fn run(&mut self, _: Self::SystemData) {
     }
 }
 
 struct UpdateBall;
 
 impl<'a> System<'a> for UpdateBall {
-    type SystemData = (ReadStorage<'a, Ball>, WriteStorage<'a, TransformComponent>);
+    type SystemData = (ReadStorage<'a, Ball>, WriteStorage<'a, TransformComponent>, Read<'a, Controllers>);
 
-    fn run(&mut self, (ball_storage, mut transform_storage): Self::SystemData) {
+    fn run(&mut self, (ball_storage, mut transform_storage, controller_storage): Self::SystemData) {
         use specs::Join;
-        for (_, _t) in (&ball_storage, &mut transform_storage).join() {
+        let (x_axis, y_axis) = if controller_storage.0.len() > 0 {
+            (controller_storage.0[0].left_axis_x, controller_storage.0[0].left_axis_y)
+        } else {
+            (0.0, 0.0)
+        };
+        for (_, t) in (&ball_storage, &mut transform_storage).join() {
+            t.position.x = x_axis;
+            t.position.y = y_axis;
         }
     }
 }
@@ -122,12 +126,36 @@ fn main() {
     };
 
     let sdl_context = sdl2::init().unwrap();
+
+    //Print off information about connected controllers
+    let controller_system = sdl_context.game_controller().unwrap();
+
+    let num_sticks = controller_system.num_joysticks().unwrap();
+    println!("{} game controllers are connected", num_sticks);
+
+    let mut controllers = Vec::new();
+    let mut controller_data = Vec::new();
+    for i in 0..num_sticks {
+        let name = controller_system.name_for_index(i).unwrap();
+        println!("{}", name);
+        if controller_system.is_game_controller(i) {
+            let mut c = controller_system.open(i).unwrap();
+            c.set_rumble(0xffff, 0xffff, 300).unwrap();
+            controllers.push(c);
+            let c_data = ControllerState {
+                left_axis_x: 0.0,
+                left_axis_y: 0.0
+            };
+            controller_data.push(c_data);
+        }
+    }
     let video_context = sdl_context.video().unwrap();
     let mut events = sdl_context.event_pump().unwrap();
     let window = video_context.window("Pong2", 640, 480).vulkan().build().unwrap();
 
     world.add_resource(DeltaTime(0.01));
     world.add_resource(TotalTime(0.0));
+    world.add_resource(Controllers(controller_data));
 
     let num_threads = num_cpus::get();
     let thread_pool = rayon::ThreadPoolBuilder::new().num_threads(num_threads).build().unwrap();
@@ -152,6 +180,16 @@ fn main() {
                 _ => {}
             }
         }
+        let mut controller_data = world.write_resource::<Controllers>();
+        for (i, controller) in controllers.iter().enumerate() {
+            let x = controller.axis(sdl2::controller::Axis::LeftX);
+            let y = controller.axis(sdl2::controller::Axis::LeftY);
+            let x = x as f32 / AXIS_MAX;
+            let y = y as f32 / AXIS_MAX;
+            controller_data.0[i].left_axis_x = x;
+            controller_data.0[i].left_axis_y = y;
+        }
+        drop(controller_data);
         let mut time = world.write_resource::<TotalTime>();
         let dt = world.read_resource::<DeltaTime>();
         time.0 += dt.0;
