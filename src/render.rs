@@ -7,12 +7,12 @@ use ash::vk_make_version;
 use std::ffi::{CString, CStr};
 use std::os::raw::{c_char, c_void};
 
-use specs::{Builder, Component, NullStorage, System, Read, ReadStorage, WriteStorage, DispatcherBuilder};
+use specs::{Builder, Component, VecStorage, System, ReadStorage};
 use specs_derive::{Component};
 
 use byteorder::{NativeEndian, ByteOrder};
 
-use crate::fy_math::{Vec4, Mat4, TransformComponent};
+use crate::fy_math::{Vec2, Vec4, Mat4, TransformComponent};
 
 pub struct RenderContext {
     instance: ash::Instance,
@@ -36,9 +36,49 @@ pub struct RenderContext {
     thread_pool: std::sync::Arc<rayon::ThreadPool>
 }
 
-#[derive(Component, Default)]
-#[storage(NullStorage)]
-pub struct RenderComponent;
+#[repr(C)]
+pub struct Vertex {
+    pub position: Vec2
+}
+
+struct VulkanBuffer {
+    buffer: vk::Buffer,
+    allocation: vk_mem::Allocation
+}
+
+#[derive(Component)]
+#[storage(VecStorage)]
+pub struct RenderComponent {
+    vertex_buffer: VulkanBuffer
+}
+
+impl RenderComponent {
+    pub fn new(context: &mut RenderContext, vertices: &[Vertex]) -> RenderComponent {
+        //Create a buffer to hold the vertices
+        let (buffer, allocation, _) = {
+            let buf_create = vk::BufferCreateInfo::builder()
+                .size(vertices.len() as u64 * std::mem::size_of::<Vertex>() as u64)
+                .usage(vk::BufferUsageFlags::VERTEX_BUFFER)
+                .build();
+
+            let alloc_create = vk_mem::AllocationCreateInfo {
+                usage: vk_mem::MemoryUsage::GpuOnly,
+                ..Default::default()
+            };
+
+            context.mem_allocator.create_buffer(&buf_create, &alloc_create).unwrap()
+        };
+
+        let vertex_buffer = VulkanBuffer {
+            buffer,
+            allocation
+        };
+
+        RenderComponent {
+            vertex_buffer
+        }
+    }
+}
 
 const PUSH_CONSTANT_SIZE: u32 = std::mem::size_of::<Mat4>() as u32;
 
