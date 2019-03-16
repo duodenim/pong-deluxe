@@ -54,8 +54,11 @@ impl<'a> System<'a> for UpdateBall {
 
     fn run(&mut self, (ball_storage, mut transform_storage, controller_storage): Self::SystemData) {
         use specs::Join;
-        let x_axis = controller_storage.0[0].left_axis_x;
-        let y_axis = controller_storage.0[0].left_axis_y;
+        let (x_axis, y_axis) = if controller_storage.0.len() > 0 {
+            (controller_storage.0[0].left_axis_x, controller_storage.0[0].left_axis_y)
+        } else {
+            (0.0, 0.0)
+        };
         for (_, t) in (&ball_storage, &mut transform_storage).join() {
             t.position.x = x_axis;
             t.position.y = y_axis;
