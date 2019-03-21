@@ -1,7 +1,7 @@
 use specs::{Component, DenseVecStorage};
 use specs_derive::{Component};
 
-#[derive(Default)]
+#[derive(Default, Copy, Clone)]
 pub struct Vec2 {
     pub x: f32,
     pub y: f32

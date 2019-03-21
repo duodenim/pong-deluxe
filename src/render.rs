@@ -14,6 +14,14 @@ use byteorder::{NativeEndian, ByteOrder};
 
 use crate::fy_math::{Vec2, Vec4, Mat4, TransformComponent};
 
+//16MB for uploads
+const UPLOAD_BUFFER_SIZE: u64 = 16 * 1024 * 1024;
+
+struct VulkanBuffer {
+    buffer: vk::Buffer,
+    allocation: vk_mem::Allocation
+}
+
 pub struct RenderContext {
     instance: ash::Instance,
     phys_device: vk::PhysicalDevice,
@@ -33,17 +41,14 @@ pub struct RenderContext {
     graphics_pipeline: vk::Pipeline,
     pipeline_layout: vk::PipelineLayout,
     render_area: vk::Rect2D,
-    thread_pool: std::sync::Arc<rayon::ThreadPool>
+    thread_pool: std::sync::Arc<rayon::ThreadPool>,
+    upload_buffer: VulkanBuffer
 }
 
 #[repr(C)]
+#[derive(Copy, Clone)]
 pub struct Vertex {
     pub position: Vec2
-}
-
-struct VulkanBuffer {
-    buffer: vk::Buffer,
-    allocation: vk_mem::Allocation
 }
 
 #[derive(Component)]
@@ -58,7 +63,7 @@ impl RenderComponent {
         let (buffer, allocation, _) = {
             let buf_create = vk::BufferCreateInfo::builder()
                 .size(vertices.len() as u64 * std::mem::size_of::<Vertex>() as u64)
-                .usage(vk::BufferUsageFlags::VERTEX_BUFFER)
+                .usage(vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST)
                 .build();
 
             let alloc_create = vk_mem::AllocationCreateInfo {
@@ -69,10 +74,47 @@ impl RenderComponent {
             context.mem_allocator.create_buffer(&buf_create, &alloc_create).unwrap()
         };
 
+        //Copy vertex data to staging buffer
+        let data_ptr = context.mem_allocator.map_memory(&context.upload_buffer.allocation).unwrap();
+        let data_ptr = data_ptr as *mut Vertex;
+        let dest_verts = unsafe { core::slice::from_raw_parts_mut(data_ptr, vertices.len()) };
+        dest_verts.copy_from_slice(vertices);
         let vertex_buffer = VulkanBuffer {
             buffer,
             allocation
         };
+
+        //Run command buffer to copy to vertex buffer
+        {
+            let begin_info = vk::CommandBufferBeginInfo::builder()
+                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
+                .build();
+            unsafe { context.device.begin_command_buffer(context.graphics_command_buffer, &begin_info).unwrap() };
+
+            let copy_region = vk::BufferCopy::builder()
+                .src_offset(0)
+                .dst_offset(0)
+                .size((vertices.len() * std::mem::size_of::<Vertex>()) as u64)
+                .build();
+            let regions = [copy_region];
+            unsafe { 
+                context.device.cmd_copy_buffer(context.graphics_command_buffer, context.upload_buffer.buffer, buffer, &regions);
+                context.device.end_command_buffer(context.graphics_command_buffer).unwrap(); 
+            }
+
+            let cmd_bfrs = [context.graphics_command_buffer];
+
+            let submit = vk::SubmitInfo::builder()
+                .command_buffers(&cmd_bfrs)
+                .build();
+
+            let submits = [submit];
+
+            unsafe {
+                context.device.queue_submit(context.graphics_queue, &submits, vk::Fence::null()).unwrap();
+                context.device.queue_wait_idle(context.graphics_queue).unwrap();
+            }
+        }
 
         RenderComponent {
             vertex_buffer
@@ -180,7 +222,7 @@ impl RenderContext {
             .enabled_extension_names(&device_extensions);
         let device = unsafe { instance.create_device(physical_device, &device_create_info, None).unwrap() };
 
-        let allocator = {
+        let mut allocator = {
             let create_info = vk_mem::AllocatorCreateInfo {
                 physical_device,
                 device: device.clone(),
@@ -485,6 +527,30 @@ impl RenderContext {
             .extent(vk::Extent2D::builder().width(window_size_x).height(window_size_y).build())
             .build();
 
+        //Create buffer to handle staging uploads
+        let upload_buffer = {
+            let (buffer, allocation, _) = {
+            let buf_create = vk::BufferCreateInfo::builder()
+                .size(UPLOAD_BUFFER_SIZE)
+                .usage(vk::BufferUsageFlags::TRANSFER_SRC)
+                .build();
+
+            let alloc_create = vk_mem::AllocationCreateInfo {
+                usage: vk_mem::MemoryUsage::CpuOnly,
+                required_flags: vk::MemoryPropertyFlags::empty(),
+                preferred_flags: vk::MemoryPropertyFlags::empty(),
+                ..Default::default()
+            };
+
+            allocator.create_buffer(&buf_create, &alloc_create).unwrap()
+            };
+
+            VulkanBuffer {
+                buffer,
+                allocation
+            }
+        };
+
         RenderContext {
             instance,
             phys_device: physical_device,
@@ -504,7 +570,8 @@ impl RenderContext {
             graphics_pipeline,
             render_area,
             pipeline_layout,
-            thread_pool
+            thread_pool,
+            upload_buffer
         }
     }
 }
