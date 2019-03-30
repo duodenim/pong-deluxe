@@ -412,12 +412,30 @@ impl RenderContext {
                 .name(&entrypoint)
                 .build();
 
-            //Points are read from a storage buffer, so no vertex input is necessary
-            let vertex_input = vk::PipelineVertexInputStateCreateInfo::builder().build();
+            let vertex_binding = vk::VertexInputBindingDescription::builder()
+                .binding(0)
+                .stride(std::mem::size_of::<Vertex>() as u32)
+                .input_rate(vk::VertexInputRate::VERTEX)
+                .build();
+
+            let vertex_attribute = vk::VertexInputAttributeDescription::builder()
+                .location(0)
+                .binding(0)
+                .format(vk::Format::R32G32_SFLOAT)
+                .offset(0)
+                .build();
+
+            let vertex_binding = [vertex_binding];
+            let vertex_attribute = [vertex_attribute];
+
+            let vertex_input = vk::PipelineVertexInputStateCreateInfo::builder()
+                .vertex_attribute_descriptions(&vertex_attribute)
+                .vertex_binding_descriptions(&vertex_binding)
+                .build();
 
             //Verticies will be drawn as points
             let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::builder()
-                .topology(vk::PrimitiveTopology::POINT_LIST)
+                .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
                 .primitive_restart_enable(false)
                 .build();
 
@@ -600,7 +618,7 @@ impl <'a> System<'a> for RenderContext {
             unsafe { self.device.begin_command_buffer(*sub_cmd_bfr, &begin_info).unwrap(); }
         }
 
-        (&render_storage, &transform_storage).par_join().for_each(|(_, transform)| {
+        (&render_storage, &transform_storage).par_join().for_each(|(renderable, transform)| {
             let idx = match self.thread_pool.current_thread_index() {
                 None => {
                     panic!("Rendering operations occured outside thread pool!");
@@ -647,7 +665,10 @@ impl <'a> System<'a> for RenderContext {
                 let slice = std::slice::from_raw_parts(ptr as *const u8, PUSH_CONSTANT_SIZE as usize);
                 self.device.cmd_bind_pipeline(self.sub_command_buffers[idx], vk::PipelineBindPoint::GRAPHICS, self.graphics_pipeline);
                 self.device.cmd_push_constants(self.sub_command_buffers[idx], self.pipeline_layout, vk::ShaderStageFlags::VERTEX, 0, &slice);
-                self.device.cmd_draw(self.sub_command_buffers[idx], 1, 1, 0, 0);
+                let offsets: [vk::DeviceSize; 1] = [0];
+                let buffers = [renderable.vertex_buffer.buffer];
+                self.device.cmd_bind_vertex_buffers(self.sub_command_buffers[idx], 0, &buffers, &offsets);
+                self.device.cmd_draw(self.sub_command_buffers[idx], 3, 1, 0, 0);
             }
         });
 
