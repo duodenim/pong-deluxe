@@ -8,10 +8,12 @@ use fy_math::{Vec2,TransformComponent};
 
 const AXIS_MAX: f32 = 32768.0;
 
-const VERTICES: [Vertex; 4] = [Vertex { position: Vec2{ x: -0.5, y: 0.5} },
-                               Vertex { position: Vec2{ x: 0.5, y: 0.5}  },
-                               Vertex { position: Vec2{ x: 0.5, y: -0.5} },
-                               Vertex { position: Vec2{ x: -0.5, y: -0.5} }];
+const VERTICES: [Vertex; 4] = [Vertex { position: Vec2{ x: -0.2, y: 0.2} },
+                               Vertex { position: Vec2{ x: 0.2, y: 0.2}  },
+                               Vertex { position: Vec2{ x: 0.2, y: -0.2} },
+                               Vertex { position: Vec2{ x: -0.2, y: -0.2} }];
+
+const INDICES: [u32; 6] = [0,1,2,0,2,3];
 
 #[derive(Component)]
 #[storage(VecStorage)]
@@ -142,7 +144,7 @@ fn main() {
             player_idx: 0
         };
 
-        let model = RenderComponent::new(&mut renderer, &VERTICES);
+        let model = RenderComponent::new(&mut renderer, &VERTICES, &INDICES);
         world.create_entity().with(transform).with(paddle).with(model).with(physics).build()
     };
 
@@ -157,7 +159,7 @@ fn main() {
         let paddle = Paddle {
             player_idx: 1
         };
-        let model = RenderComponent::new(&mut renderer, &VERTICES);
+        let model = RenderComponent::new(&mut renderer, &VERTICES, &INDICES);
         world.create_entity().with(transform).with(paddle).with(model).with(physics).build()
     };
 
@@ -168,7 +170,7 @@ fn main() {
         let physics = PhysicsComponent {
             velocity: Vec2::new(0.5, 0.4)
         };
-        let model = RenderComponent::new(&mut renderer, &VERTICES);
+        let model = RenderComponent::new(&mut renderer, &VERTICES, &INDICES);
         world.create_entity().with(model).with(Ball).with(transform).with(physics).build();
     };
 

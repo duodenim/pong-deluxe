@@ -54,16 +54,22 @@ pub struct Vertex {
 #[derive(Component)]
 #[storage(VecStorage)]
 pub struct RenderComponent {
-    vertex_buffer: VulkanBuffer
+    vertex_buffer: VulkanBuffer,
+    index_offset: vk::DeviceSize,
+    num_indices: u32
 }
 
 impl RenderComponent {
-    pub fn new(context: &mut RenderContext, vertices: &[Vertex]) -> RenderComponent {
+    pub fn new(context: &mut RenderContext, vertices: &[Vertex], indices: &[u32]) -> RenderComponent {
         //Create a buffer to hold the vertices
+        let vertices_size = vertices.len() * std::mem::size_of::<Vertex>();
+        let indices_size = indices.len() * std::mem::size_of::<u32>();
+        let buffer_size = (vertices_size + indices_size) as u64;
+        assert!(buffer_size< UPLOAD_BUFFER_SIZE, "Staging buffer not large enough for upload!");
         let (buffer, allocation, _) = {
             let buf_create = vk::BufferCreateInfo::builder()
-                .size(vertices.len() as u64 * std::mem::size_of::<Vertex>() as u64)
-                .usage(vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST)
+                .size(buffer_size)
+                .usage(vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::INDEX_BUFFER)
                 .build();
 
             let alloc_create = vk_mem::AllocationCreateInfo {
@@ -75,10 +81,12 @@ impl RenderComponent {
         };
 
         //Copy vertex data to staging buffer
-        let data_ptr = context.mem_allocator.map_memory(&context.upload_buffer.allocation).unwrap();
-        let data_ptr = data_ptr as *mut Vertex;
+        let data_ptr = context.mem_allocator.map_memory(&context.upload_buffer.allocation).unwrap() as *mut Vertex;
+        let index_ptr = unsafe { data_ptr.offset(vertices.len() as isize) as *mut u32};
         let dest_verts = unsafe { core::slice::from_raw_parts_mut(data_ptr, vertices.len()) };
+        let dest_idxs = unsafe { core::slice::from_raw_parts_mut(index_ptr, indices.len()) };
         dest_verts.copy_from_slice(vertices);
+        dest_idxs.copy_from_slice(indices);
         let vertex_buffer = VulkanBuffer {
             buffer,
             allocation
@@ -94,7 +102,7 @@ impl RenderComponent {
             let copy_region = vk::BufferCopy::builder()
                 .src_offset(0)
                 .dst_offset(0)
-                .size((vertices.len() * std::mem::size_of::<Vertex>()) as u64)
+                .size(buffer_size)
                 .build();
             let regions = [copy_region];
             unsafe { 
@@ -117,7 +125,9 @@ impl RenderComponent {
         }
 
         RenderComponent {
-            vertex_buffer
+            vertex_buffer,
+            index_offset: vertices_size as vk::DeviceSize,
+            num_indices: indices.len() as u32
         }
     }
 }
@@ -668,7 +678,8 @@ impl <'a> System<'a> for RenderContext {
                 let offsets: [vk::DeviceSize; 1] = [0];
                 let buffers = [renderable.vertex_buffer.buffer];
                 self.device.cmd_bind_vertex_buffers(self.sub_command_buffers[idx], 0, &buffers, &offsets);
-                self.device.cmd_draw(self.sub_command_buffers[idx], 3, 1, 0, 0);
+                self.device.cmd_bind_index_buffer(self.sub_command_buffers[idx], renderable.vertex_buffer.buffer, renderable.index_offset, vk::IndexType::UINT32);
+                self.device.cmd_draw_indexed(self.sub_command_buffers[idx], renderable.num_indices, 1, 0, 0, 0);
             }
         });
 
