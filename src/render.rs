@@ -7,12 +7,20 @@ use ash::vk_make_version;
 use std::ffi::{CString, CStr};
 use std::os::raw::{c_char, c_void};
 
-use specs::{Builder, Component, NullStorage, System, Read, ReadStorage, WriteStorage, DispatcherBuilder};
+use specs::{Builder, Component, VecStorage, System, ReadStorage};
 use specs_derive::{Component};
 
 use byteorder::{NativeEndian, ByteOrder};
 
-use crate::fy_math::{Vec4, Mat4, TransformComponent};
+use crate::fy_math::{Vec2, Vec4, Mat4, TransformComponent};
+
+//16MB for uploads
+const UPLOAD_BUFFER_SIZE: u64 = 16 * 1024 * 1024;
+
+struct VulkanBuffer {
+    buffer: vk::Buffer,
+    allocation: vk_mem::Allocation
+}
 
 pub struct RenderContext {
     instance: ash::Instance,
@@ -33,12 +41,96 @@ pub struct RenderContext {
     graphics_pipeline: vk::Pipeline,
     pipeline_layout: vk::PipelineLayout,
     render_area: vk::Rect2D,
-    thread_pool: std::sync::Arc<rayon::ThreadPool>
+    thread_pool: std::sync::Arc<rayon::ThreadPool>,
+    upload_buffer: VulkanBuffer
 }
 
-#[derive(Component, Default)]
-#[storage(NullStorage)]
-pub struct RenderComponent;
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct Vertex {
+    pub position: Vec2
+}
+
+#[derive(Component)]
+#[storage(VecStorage)]
+pub struct RenderComponent {
+    vertex_buffer: VulkanBuffer,
+    index_offset: vk::DeviceSize,
+    num_indices: u32
+}
+
+impl RenderComponent {
+    pub fn new(context: &mut RenderContext, vertices: &[Vertex], indices: &[u32]) -> RenderComponent {
+        //Create a buffer to hold the vertices
+        let vertices_size = vertices.len() * std::mem::size_of::<Vertex>();
+        let indices_size = indices.len() * std::mem::size_of::<u32>();
+        let buffer_size = (vertices_size + indices_size) as u64;
+        assert!(buffer_size< UPLOAD_BUFFER_SIZE, "Staging buffer not large enough for upload!");
+        let (buffer, allocation, _) = {
+            let buf_create = vk::BufferCreateInfo::builder()
+                .size(buffer_size)
+                .usage(vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::INDEX_BUFFER)
+                .build();
+
+            let alloc_create = vk_mem::AllocationCreateInfo {
+                usage: vk_mem::MemoryUsage::GpuOnly,
+                ..Default::default()
+            };
+
+            context.mem_allocator.create_buffer(&buf_create, &alloc_create).unwrap()
+        };
+
+        //Copy vertex data to staging buffer
+        let data_ptr = context.mem_allocator.map_memory(&context.upload_buffer.allocation).unwrap() as *mut Vertex;
+        let index_ptr = unsafe { data_ptr.offset(vertices.len() as isize) as *mut u32};
+        let dest_verts = unsafe { core::slice::from_raw_parts_mut(data_ptr, vertices.len()) };
+        let dest_idxs = unsafe { core::slice::from_raw_parts_mut(index_ptr, indices.len()) };
+        dest_verts.copy_from_slice(vertices);
+        dest_idxs.copy_from_slice(indices);
+        let vertex_buffer = VulkanBuffer {
+            buffer,
+            allocation
+        };
+
+        //Run command buffer to copy to vertex buffer
+        {
+            let begin_info = vk::CommandBufferBeginInfo::builder()
+                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
+                .build();
+            unsafe { context.device.begin_command_buffer(context.graphics_command_buffer, &begin_info).unwrap() };
+
+            let copy_region = vk::BufferCopy::builder()
+                .src_offset(0)
+                .dst_offset(0)
+                .size(buffer_size)
+                .build();
+            let regions = [copy_region];
+            unsafe { 
+                context.device.cmd_copy_buffer(context.graphics_command_buffer, context.upload_buffer.buffer, buffer, &regions);
+                context.device.end_command_buffer(context.graphics_command_buffer).unwrap(); 
+            }
+
+            let cmd_bfrs = [context.graphics_command_buffer];
+
+            let submit = vk::SubmitInfo::builder()
+                .command_buffers(&cmd_bfrs)
+                .build();
+
+            let submits = [submit];
+
+            unsafe {
+                context.device.queue_submit(context.graphics_queue, &submits, vk::Fence::null()).unwrap();
+                context.device.queue_wait_idle(context.graphics_queue).unwrap();
+            }
+        }
+
+        RenderComponent {
+            vertex_buffer,
+            index_offset: vertices_size as vk::DeviceSize,
+            num_indices: indices.len() as u32
+        }
+    }
+}
 
 const PUSH_CONSTANT_SIZE: u32 = std::mem::size_of::<Mat4>() as u32;
 
@@ -140,7 +232,7 @@ impl RenderContext {
             .enabled_extension_names(&device_extensions);
         let device = unsafe { instance.create_device(physical_device, &device_create_info, None).unwrap() };
 
-        let allocator = {
+        let mut allocator = {
             let create_info = vk_mem::AllocatorCreateInfo {
                 physical_device,
                 device: device.clone(),
@@ -330,12 +422,30 @@ impl RenderContext {
                 .name(&entrypoint)
                 .build();
 
-            //Points are read from a storage buffer, so no vertex input is necessary
-            let vertex_input = vk::PipelineVertexInputStateCreateInfo::builder().build();
+            let vertex_binding = vk::VertexInputBindingDescription::builder()
+                .binding(0)
+                .stride(std::mem::size_of::<Vertex>() as u32)
+                .input_rate(vk::VertexInputRate::VERTEX)
+                .build();
+
+            let vertex_attribute = vk::VertexInputAttributeDescription::builder()
+                .location(0)
+                .binding(0)
+                .format(vk::Format::R32G32_SFLOAT)
+                .offset(0)
+                .build();
+
+            let vertex_binding = [vertex_binding];
+            let vertex_attribute = [vertex_attribute];
+
+            let vertex_input = vk::PipelineVertexInputStateCreateInfo::builder()
+                .vertex_attribute_descriptions(&vertex_attribute)
+                .vertex_binding_descriptions(&vertex_binding)
+                .build();
 
             //Verticies will be drawn as points
             let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::builder()
-                .topology(vk::PrimitiveTopology::POINT_LIST)
+                .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
                 .primitive_restart_enable(false)
                 .build();
 
@@ -445,6 +555,30 @@ impl RenderContext {
             .extent(vk::Extent2D::builder().width(window_size_x).height(window_size_y).build())
             .build();
 
+        //Create buffer to handle staging uploads
+        let upload_buffer = {
+            let (buffer, allocation, _) = {
+            let buf_create = vk::BufferCreateInfo::builder()
+                .size(UPLOAD_BUFFER_SIZE)
+                .usage(vk::BufferUsageFlags::TRANSFER_SRC)
+                .build();
+
+            let alloc_create = vk_mem::AllocationCreateInfo {
+                usage: vk_mem::MemoryUsage::CpuOnly,
+                required_flags: vk::MemoryPropertyFlags::empty(),
+                preferred_flags: vk::MemoryPropertyFlags::empty(),
+                ..Default::default()
+            };
+
+            allocator.create_buffer(&buf_create, &alloc_create).unwrap()
+            };
+
+            VulkanBuffer {
+                buffer,
+                allocation
+            }
+        };
+
         RenderContext {
             instance,
             phys_device: physical_device,
@@ -464,7 +598,8 @@ impl RenderContext {
             graphics_pipeline,
             render_area,
             pipeline_layout,
-            thread_pool
+            thread_pool,
+            upload_buffer
         }
     }
 }
@@ -493,7 +628,7 @@ impl <'a> System<'a> for RenderContext {
             unsafe { self.device.begin_command_buffer(*sub_cmd_bfr, &begin_info).unwrap(); }
         }
 
-        (&render_storage, &transform_storage).par_join().for_each(|(_, transform)| {
+        (&render_storage, &transform_storage).par_join().for_each(|(renderable, transform)| {
             let idx = match self.thread_pool.current_thread_index() {
                 None => {
                     panic!("Rendering operations occured outside thread pool!");
@@ -540,7 +675,11 @@ impl <'a> System<'a> for RenderContext {
                 let slice = std::slice::from_raw_parts(ptr as *const u8, PUSH_CONSTANT_SIZE as usize);
                 self.device.cmd_bind_pipeline(self.sub_command_buffers[idx], vk::PipelineBindPoint::GRAPHICS, self.graphics_pipeline);
                 self.device.cmd_push_constants(self.sub_command_buffers[idx], self.pipeline_layout, vk::ShaderStageFlags::VERTEX, 0, &slice);
-                self.device.cmd_draw(self.sub_command_buffers[idx], 1, 1, 0, 0);
+                let offsets: [vk::DeviceSize; 1] = [0];
+                let buffers = [renderable.vertex_buffer.buffer];
+                self.device.cmd_bind_vertex_buffers(self.sub_command_buffers[idx], 0, &buffers, &offsets);
+                self.device.cmd_bind_index_buffer(self.sub_command_buffers[idx], renderable.vertex_buffer.buffer, renderable.index_offset, vk::IndexType::UINT32);
+                self.device.cmd_draw_indexed(self.sub_command_buffers[idx], renderable.num_indices, 1, 0, 0, 0);
             }
         });
 
