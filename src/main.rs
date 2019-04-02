@@ -5,21 +5,23 @@ mod render;
 use render::{RenderComponent, Vertex};
 mod fy_math;
 use fy_math::{Vec2,TransformComponent};
+mod physics;
+use physics::{PhysicsComponent};
 
 const AXIS_MAX: f32 = 32768.0;
 
-const VERTICES: [Vertex; 4] = [Vertex { position: Vec2{ x: -0.2, y: 0.2} },
-                               Vertex { position: Vec2{ x: 0.2, y: 0.2}  },
-                               Vertex { position: Vec2{ x: 0.2, y: -0.2} },
-                               Vertex { position: Vec2{ x: -0.2, y: -0.2} }];
+const BALL_VERTICES: [Vertex; 4] = [Vertex { position: Vec2{ x: -0.05, y: 0.05} },
+                               Vertex { position: Vec2{ x: 0.05, y: 0.05}  },
+                               Vertex { position: Vec2{ x: 0.05, y: -0.05} },
+                               Vertex { position: Vec2{ x: -0.05, y: -0.05} }];
+
+const PADDLE_VERTICES: [Vertex; 4] = [Vertex { position: Vec2{ x: -0.07, y: 0.2} },
+                               Vertex { position: Vec2{ x: 0.07, y: 0.2}  },
+                               Vertex { position: Vec2{ x: 0.07, y: -0.2} },
+                               Vertex { position: Vec2{ x: -0.07, y: -0.2} }];
+
 
 const INDICES: [u32; 6] = [0,1,2,0,2,3];
-
-#[derive(Component)]
-#[storage(VecStorage)]
-struct PhysicsComponent {
-    velocity: Vec2
-}
 
 #[derive(Component, Default)]
 #[storage(NullStorage)]
@@ -137,14 +139,12 @@ fn main() {
         let transform = TransformComponent {
             position: Vec2::new(0.9, 0.0)
         };
-        let physics = PhysicsComponent {
-            velocity: Vec2::new(-0.6, 1.3)
-        };
+        let physics = PhysicsComponent::new(&PADDLE_VERTICES);
         let paddle = Paddle {
             player_idx: 0
         };
 
-        let model = RenderComponent::new(&mut renderer, &VERTICES, &INDICES);
+        let model = RenderComponent::new(&mut renderer, &PADDLE_VERTICES, &INDICES);
         world.create_entity().with(transform).with(paddle).with(model).with(physics).build()
     };
 
@@ -152,14 +152,12 @@ fn main() {
         let transform = TransformComponent {
             position: Vec2::new(-0.9, 0.0)
         };
-        let physics = PhysicsComponent {
-            velocity: Vec2::new(-0.9, 0.05)
-        };
+        let physics = PhysicsComponent::new(&PADDLE_VERTICES);
 
         let paddle = Paddle {
             player_idx: 1
         };
-        let model = RenderComponent::new(&mut renderer, &VERTICES, &INDICES);
+        let model = RenderComponent::new(&mut renderer, &PADDLE_VERTICES, &INDICES);
         world.create_entity().with(transform).with(paddle).with(model).with(physics).build()
     };
 
@@ -167,10 +165,8 @@ fn main() {
         let transform = TransformComponent {
             position: Vec2::new(0.0, 0.0)
         };
-        let physics = PhysicsComponent {
-            velocity: Vec2::new(0.5, 0.4)
-        };
-        let model = RenderComponent::new(&mut renderer, &VERTICES, &INDICES);
+        let physics = PhysicsComponent::new(&BALL_VERTICES);
+        let model = RenderComponent::new(&mut renderer, &BALL_VERTICES, &INDICES);
         world.create_entity().with(model).with(Ball).with(transform).with(physics).build();
     };
 
