@@ -1,4 +1,4 @@
-use specs::{Component, VecStorage, NullStorage, World, Builder, System, Read, ReadStorage, WriteStorage, DispatcherBuilder};
+use specs::{Component, VecStorage, Entity, World, Builder, System, Read, ReadStorage, WriteStorage, DispatcherBuilder};
 use specs_derive::{Component};
 
 mod render;
@@ -6,7 +6,7 @@ use render::{RenderComponent, Vertex};
 mod fy_math;
 use fy_math::{Vec2,TransformComponent};
 mod physics;
-use physics::{PhysicsComponent};
+use physics::{PhysicsComponent, PhysicsSystem};
 
 const AXIS_MAX: f32 = 32768.0;
 
@@ -23,9 +23,21 @@ const PADDLE_VERTICES: [Vertex; 4] = [Vertex { position: Vec2{ x: -0.07, y: 0.2}
 
 const INDICES: [u32; 6] = [0,1,2,0,2,3];
 
-#[derive(Component, Default)]
-#[storage(NullStorage)]
-struct Ball;
+#[derive(Component)]
+#[storage(VecStorage)]
+struct Ball {
+    left_paddle: Entity,
+    right_paddle: Entity
+}
+
+impl Ball {
+    fn new(left_paddle: Entity, right_paddle: Entity) -> Ball {
+        Ball {
+            left_paddle,
+            right_paddle
+        }
+    }
+}
 
 #[derive(Component)]
 #[storage(VecStorage)]
@@ -47,30 +59,31 @@ struct ControllerState {
 #[derive(Default)]
 struct Controllers(std::vec::Vec<ControllerState>);
 
-struct PhysicsSystem;
-
-impl<'a> System<'a> for PhysicsSystem {
-    type SystemData = (Read<'a, DeltaTime>, Read<'a, TotalTime>, WriteStorage<'a, PhysicsComponent>, WriteStorage<'a, TransformComponent>);
-
-    fn run(&mut self, _: Self::SystemData) {
-    }
-}
-
 struct UpdateBall;
 
 impl<'a> System<'a> for UpdateBall {
-    type SystemData = (ReadStorage<'a, Ball>, WriteStorage<'a, TransformComponent>, Read<'a, Controllers>);
+    type SystemData = (ReadStorage<'a, Ball>, WriteStorage<'a, TransformComponent>, ReadStorage<'a, PhysicsComponent>, Read<'a, Controllers>);
 
-    fn run(&mut self, (ball_storage, mut transform_storage, controller_storage): Self::SystemData) {
+    fn run(&mut self, (ball_storage, mut transform_storage, physics_storage, controller_storage): Self::SystemData) {
         use specs::Join;
         let (x_axis, y_axis) = if controller_storage.0.len() > 0 {
             (controller_storage.0[0].left_axis_x, controller_storage.0[0].left_axis_y)
         } else {
             (0.0, 0.0)
         };
-        for (_, t) in (&ball_storage, &mut transform_storage).join() {
+        for (ball, t, phys_c) in (&ball_storage, &mut transform_storage, &physics_storage).join() {
             t.position.x = x_axis;
             t.position.y = y_axis;
+
+            //Check for collision against paddles
+            for other_collider in phys_c.collided_objects.iter() {
+                if *other_collider == ball.left_paddle {
+                    println!("Left paddle hit!");
+                }
+                if *other_collider == ball.right_paddle {
+                    println!("Right paddle hit!");
+                }
+            }
         }
     }
 }
@@ -135,7 +148,7 @@ fn main() {
 
     let mut renderer = render::RenderContext::new(&window, 640, 480, thread_pool.clone(), num_threads);
 
-     let _paddle1 = {
+     let paddle1 = {
         let transform = TransformComponent {
             position: Vec2::new(0.9, 0.0)
         };
@@ -148,7 +161,7 @@ fn main() {
         world.create_entity().with(transform).with(paddle).with(model).with(physics).build()
     };
 
-    let _paddle2 = {
+    let paddle2 = {
         let transform = TransformComponent {
             position: Vec2::new(-0.9, 0.0)
         };
@@ -167,7 +180,8 @@ fn main() {
         };
         let physics = PhysicsComponent::new(&BALL_VERTICES);
         let model = RenderComponent::new(&mut renderer, &BALL_VERTICES, &INDICES);
-        world.create_entity().with(model).with(Ball).with(transform).with(physics).build();
+        let ball = Ball::new(paddle2, paddle1);
+        world.create_entity().with(model).with(ball).with(transform).with(physics).build();
     };
 
     let mut dispatcher = DispatcherBuilder::new()
