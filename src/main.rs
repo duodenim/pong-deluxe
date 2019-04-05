@@ -62,28 +62,25 @@ struct Controllers(std::vec::Vec<ControllerState>);
 struct UpdateBall;
 
 impl<'a> System<'a> for UpdateBall {
-    type SystemData = (ReadStorage<'a, Ball>, WriteStorage<'a, TransformComponent>, ReadStorage<'a, PhysicsComponent>, Read<'a, Controllers>);
+    type SystemData = (ReadStorage<'a, Ball>, WriteStorage<'a, TransformComponent>, WriteStorage<'a, PhysicsComponent>, Read<'a, DeltaTime>);
 
-    fn run(&mut self, (ball_storage, mut transform_storage, physics_storage, controller_storage): Self::SystemData) {
+    fn run(&mut self, (ball_storage, mut transform_storage, mut physics_storage, deltatime): Self::SystemData) {
         use specs::Join;
-        let (x_axis, y_axis) = if controller_storage.0.len() > 0 {
-            (controller_storage.0[0].left_axis_x, controller_storage.0[0].left_axis_y)
-        } else {
-            (0.0, 0.0)
-        };
-        for (ball, t, phys_c) in (&ball_storage, &mut transform_storage, &physics_storage).join() {
-            t.position.x = x_axis;
-            t.position.y = y_axis;
-
+        let deltatime = deltatime.0;
+        for (ball, t, phys_c) in (&ball_storage, &mut transform_storage, &mut physics_storage).join() {
             //Check for collision against paddles
             for other_collider in phys_c.collided_objects.iter() {
                 if *other_collider == ball.left_paddle {
                     println!("Left paddle hit!");
+                    phys_c.velocity.x *= -1.0;
                 }
                 if *other_collider == ball.right_paddle {
                     println!("Right paddle hit!");
+                    phys_c.velocity.x *= -1.0;
                 }
             }
+            t.position.x = t.position.x + phys_c.velocity.x * deltatime;
+            t.position.y = t.position.y + phys_c.velocity.y * deltatime;
         }
     }
 }
@@ -178,7 +175,7 @@ fn main() {
         let transform = TransformComponent {
             position: Vec2::new(0.0, 0.0)
         };
-        let physics = PhysicsComponent::new(&BALL_VERTICES);
+        let physics = PhysicsComponent::with_velocity(&BALL_VERTICES, Vec2::new(0.5, 0.0));
         let model = RenderComponent::new(&mut renderer, &BALL_VERTICES, &INDICES);
         let ball = Ball::new(paddle2, paddle1);
         world.create_entity().with(model).with(ball).with(transform).with(physics).build();

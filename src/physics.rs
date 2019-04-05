@@ -12,7 +12,7 @@ struct AABB {
 #[derive(Component)]
 #[storage(VecStorage)]
 pub struct PhysicsComponent {
-    velocity: Vec2,
+    pub velocity: Vec2,
     bbox: AABB,
     pub collided_objects: Vec<Entity>
 }
@@ -21,6 +21,14 @@ impl PhysicsComponent {
     pub fn new(vertices: &[Vertex]) -> PhysicsComponent {
         PhysicsComponent {
             velocity: Vec2::new(0.0, 0.0),
+            bbox: AABB::from_vertices(vertices),
+            collided_objects: Vec::new()
+        }
+    }
+
+    pub fn with_velocity(vertices: &[Vertex], velocity: Vec2) -> PhysicsComponent {
+        PhysicsComponent {
+            velocity,
             bbox: AABB::from_vertices(vertices),
             collided_objects: Vec::new()
         }
@@ -107,11 +115,9 @@ impl<'a> System<'a> for PhysicsSystem {
         for combination in (&physics_storage, &transform_storage, &entities).join().combinations(2) {
             let (collider1, transform1, e1) = combination[0];
             let (collider2, transform2, e2) = combination[1];
-            println!("Checking collision between ({}, {}) and ({}, {})", transform1.position.x, transform1.position.y, transform2.position.x, transform2.position.y);
             let box1 = collider1.bbox.adjust_position(transform1.position);
             let box2 = collider2.bbox.adjust_position(transform2.position);
             if box1.check_collision(&box2) {
-                println!("Collision occured!");
                 collision_map.push((e1, e2));
             }
         }
