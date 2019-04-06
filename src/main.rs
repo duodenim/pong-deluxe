@@ -1,6 +1,8 @@
 use specs::{Component, VecStorage, Entity, World, Builder, System, Read, ReadStorage, WriteStorage, DispatcherBuilder};
 use specs_derive::{Component};
 
+use rand::{thread_rng, Rng};
+
 mod render;
 use render::{RenderComponent, Vertex};
 mod fy_math;
@@ -9,6 +11,8 @@ mod physics;
 use physics::{PhysicsComponent, PhysicsSystem};
 
 const AXIS_MAX: f32 = 32768.0;
+
+const BOUNCE_OFFSET: f32 = 15.0;
 
 const BALL_VERTICES: [Vertex; 4] = [Vertex { position: Vec2{ x: -0.05, y: 0.05} },
                                Vertex { position: Vec2{ x: 0.05, y: 0.05}  },
@@ -19,6 +23,11 @@ const PADDLE_VERTICES: [Vertex; 4] = [Vertex { position: Vec2{ x: -0.07, y: 0.2}
                                Vertex { position: Vec2{ x: 0.07, y: 0.2}  },
                                Vertex { position: Vec2{ x: 0.07, y: -0.2} },
                                Vertex { position: Vec2{ x: -0.07, y: -0.2} }];
+
+const WALL_VERTICES: [Vertex; 4] = [Vertex { position: Vec2{ x: -1.0, y: 0.05} },
+                               Vertex { position: Vec2{ x: 1.0, y: 0.05}  },
+                               Vertex { position: Vec2{ x: 1.0, y: -0.05} },
+                               Vertex { position: Vec2{ x: -1.0, y: -0.05} }];
 
 
 const INDICES: [u32; 6] = [0,1,2,0,2,3];
@@ -71,16 +80,42 @@ impl<'a> System<'a> for UpdateBall {
             //Check for collision against paddles
             for other_collider in phys_c.collided_objects.iter() {
                 if *other_collider == ball.left_paddle {
-                    println!("Left paddle hit!");
+                    let mut rng = thread_rng();
+                    let angle = rng.gen_range(-1.0 * BOUNCE_OFFSET, 1.0 * BOUNCE_OFFSET);
+                    let y_offset = angle.to_radians().sin();
                     phys_c.velocity.x *= -1.0;
-                }
-                if *other_collider == ball.right_paddle {
-                    println!("Right paddle hit!");
+                    phys_c.velocity.y += y_offset;
+                } else if *other_collider == ball.right_paddle {
+                    let mut rng = thread_rng();
+                    let angle = rng.gen_range(-1.0 * BOUNCE_OFFSET, 1.0 * BOUNCE_OFFSET);
+                    let y_offset = angle.to_radians().sin();
                     phys_c.velocity.x *= -1.0;
+                    phys_c.velocity.y += y_offset;
+                } else {
+                    phys_c.velocity.y *= -1.0;
                 }
             }
             t.position.x = t.position.x + phys_c.velocity.x * deltatime;
             t.position.y = t.position.y + phys_c.velocity.y * deltatime;
+
+            //Check for score conditions
+            let mut reset = false;
+            if t.position.x > 1.3 {
+                println!("Player 2 has scored!");
+                reset = true;
+            } else if t.position.x < -1.3 {
+                println!("Player 1 has scored!");
+                reset = true;
+            }
+
+            if reset {
+                t.position = Vec2::new(0.0, 0.0);
+                let mut rng = thread_rng();
+                let angle: f32 = rng.gen_range(0.0, 360.0);
+                let x = angle.to_radians().cos();
+                let y = angle.to_radians().sin();
+                phys_c.velocity = 0.5 * Vec2::new(x, y);
+            }
         }
     }
 }
@@ -88,13 +123,18 @@ impl<'a> System<'a> for UpdateBall {
 struct UpdatePaddles;
 
 impl<'a> System<'a> for UpdatePaddles {
-    type SystemData = (ReadStorage<'a, Paddle>, ReadStorage<'a, TransformComponent>);
+    type SystemData = (ReadStorage<'a, Paddle>, WriteStorage<'a, TransformComponent>, Read<'a, Controllers>);
 
-    fn run(&mut self, (paddle_storage, transform_storage): Self::SystemData) {
+    fn run(&mut self, (paddle_storage, mut transform_storage, controller_storage): Self::SystemData) {
         use specs::Join;
 
-        for (paddles, t) in (&paddle_storage, &transform_storage).join() {
-            
+        for (paddle, t) in (&paddle_storage, &mut transform_storage).join() {
+            let position = if paddle.player_idx < controller_storage.0.len() as u32 {
+                controller_storage.0[paddle.player_idx as usize].left_axis_y
+            } else {
+                0.0
+            };
+            t.position.y = position;
         }
     }
 }
@@ -179,6 +219,24 @@ fn main() {
         let model = RenderComponent::new(&mut renderer, &BALL_VERTICES, &INDICES);
         let ball = Ball::new(paddle2, paddle1);
         world.create_entity().with(model).with(ball).with(transform).with(physics).build();
+    };
+
+    let _top_wall = {
+        let transform = TransformComponent {
+            position: Vec2::new(0.0, -0.9)
+        };
+        let physics = PhysicsComponent::new(&WALL_VERTICES);
+        let model = RenderComponent::new(&mut renderer, &WALL_VERTICES, &INDICES);
+        world.create_entity().with(transform).with(physics).with(model).build()
+    };
+
+    let _bot_wall = {
+        let transform = TransformComponent {
+            position: Vec2::new(0.0, 0.9)
+        };
+        let physics = PhysicsComponent::new(&WALL_VERTICES);
+        let model = RenderComponent::new(&mut renderer, &WALL_VERTICES, &INDICES);
+        world.create_entity().with(transform).with(physics).with(model).build()
     };
 
     let mut dispatcher = DispatcherBuilder::new()

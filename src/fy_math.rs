@@ -1,5 +1,6 @@
 use specs::{Component, DenseVecStorage};
 use specs_derive::{Component};
+use std::ops;
 
 #[derive(Default, Copy, Clone)]
 pub struct Vec2 {
@@ -29,6 +30,25 @@ impl Vec2 {
             x,
             y
         }
+    }
+}
+
+impl ops::Mul<f32> for Vec2 {
+    type Output = Vec2;
+
+    fn mul(self, _rhs: f32) -> Vec2 {
+        Vec2 {
+            x: self.x * _rhs,
+            y: self.y * _rhs
+        }
+    }
+}
+
+impl ops::Mul<Vec2> for f32 {
+    type Output = Vec2;
+
+    fn mul(self, _rhs: Vec2) -> Vec2 {
+        _rhs * self
     }
 }
 
