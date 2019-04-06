@@ -79,20 +79,22 @@ impl<'a> System<'a> for UpdateBall {
         for (ball, t, phys_c) in (&ball_storage, &mut transform_storage, &mut physics_storage).join() {
             //Check for collision against paddles
             for other_collider in phys_c.collided_objects.iter() {
-                if *other_collider == ball.left_paddle {
+                let other_entity = other_collider.other;
+                let mtv = other_collider.mtv;
+                if other_entity == ball.left_paddle {
                     let mut rng = thread_rng();
                     let angle = rng.gen_range(-1.0 * BOUNCE_OFFSET, 1.0 * BOUNCE_OFFSET);
                     let y_offset = angle.to_radians().sin();
-                    phys_c.velocity.x *= -1.0;
+                    phys_c.velocity = phys_c.velocity.reflect(&mtv);
                     phys_c.velocity.y += y_offset;
-                } else if *other_collider == ball.right_paddle {
+                } else if other_entity == ball.right_paddle {
                     let mut rng = thread_rng();
                     let angle = rng.gen_range(-1.0 * BOUNCE_OFFSET, 1.0 * BOUNCE_OFFSET);
                     let y_offset = angle.to_radians().sin();
-                    phys_c.velocity.x *= -1.0;
+                    phys_c.velocity = phys_c.velocity.reflect(&mtv);
                     phys_c.velocity.y += y_offset;
                 } else {
-                    phys_c.velocity.y *= -1.0;
+                    phys_c.velocity = phys_c.velocity.reflect(&mtv);
                 }
             }
             t.position.x = t.position.x + phys_c.velocity.x * deltatime;

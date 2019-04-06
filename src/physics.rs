@@ -9,12 +9,17 @@ struct AABB {
     bot_left: Vec2
 }
 
+pub struct Collision {
+    pub other: Entity,
+    pub mtv: Vec2
+}
+
 #[derive(Component)]
 #[storage(VecStorage)]
 pub struct PhysicsComponent {
     pub velocity: Vec2,
     bbox: AABB,
-    pub collided_objects: Vec<Entity>
+    pub collided_objects: Vec<Collision>
 }
 
 impl PhysicsComponent {
@@ -84,21 +89,46 @@ impl AABB {
         }
     }
 
-    fn check_collision(&self, other: &AABB) -> bool {
-        if self.top_right.x < other.bot_left.x {
-            return false;
-        }
-        if self.bot_left.x > other.top_right.x {
-            return false;
-        }
-        if self.top_right.y < other.bot_left.y {
-            return false;
-        }
-        if self.bot_left.y > other.top_right.y {
-            return false;
+    fn check_collision(&self, other: &AABB) -> Option<Vec2> {
+        //Simplified SAT implementation, used instead of AABB test to get collision normal
+
+        let mut overlap = std::f32::MAX;
+        let mut axis = Vec2::new(1.0, 0.0);
+        //Project onto X axis
+        {
+            let this_min_x = self.bot_left.x;
+            let this_max_x = self.top_right.x;
+            let other_min_x = other.bot_left.x;
+            let other_max_x = other.top_right.x;
+
+            if this_max_x < other_min_x || other_max_x < this_min_x {
+                return None;
+            } else {
+                let new_overlap = this_max_x.min(other_max_x) - this_min_x.max(other_min_x);
+                if new_overlap < overlap {
+                    overlap = new_overlap;
+                }
+            }
         }
 
-        return true;
+        //Project onto Y axis
+        {
+            let this_min_y = self.bot_left.y;
+            let this_max_y = self.top_right.y;
+            let other_min_y = other.bot_left.y;
+            let other_max_y = other.top_right.y;
+            if this_max_y < other_min_y || other_max_y < this_min_y {
+                return None;
+            } else {
+                let new_overlap = this_max_y.min(other_max_y) - this_min_y.max(other_min_y);
+                if new_overlap < overlap {
+                    overlap = new_overlap;
+                    axis = Vec2::new(0.0, 1.0);
+                }
+            }
+        }
+
+        return Some(axis);
     }
 }
 
@@ -111,14 +141,23 @@ impl<'a> System<'a> for PhysicsSystem {
         use specs::Join;
         use itertools::Itertools;
         let num_colliders = physics_storage.count();
-        let mut collision_map: Vec<(Entity, Entity)> = Vec::new();
+        let mut collision_map: Vec<(Entity, Entity, Vec2)> = Vec::new();
         for combination in (&physics_storage, &transform_storage, &entities).join().combinations(2) {
             let (collider1, transform1, e1) = combination[0];
             let (collider2, transform2, e2) = combination[1];
             let box1 = collider1.bbox.adjust_position(transform1.position);
             let box2 = collider2.bbox.adjust_position(transform2.position);
-            if box1.check_collision(&box2) {
-                collision_map.push((e1, e2));
+
+            match box1.check_collision(&box2) {
+                None => {},
+                Some(axis) => {
+                    let t2_to_t1 = transform2.position - transform1.position;
+                    if axis.dot(&t2_to_t1) >= 0.0 {
+                        collision_map.push((e1, e2, -1.0 * axis));
+                    } else {
+                        collision_map.push((e1, e2, axis));
+                    }
+                }
             }
         }
 
@@ -127,7 +166,7 @@ impl<'a> System<'a> for PhysicsSystem {
         }
 
         for collision in collision_map.iter() {
-            let (e1, e2) = collision;
+            let (e1, e2, mtv) = collision;
             let phys_comp1 = match physics_storage.get_mut(*e1) {
                 None => {
                     panic!("Collision from unknown entity occured!");
@@ -136,7 +175,10 @@ impl<'a> System<'a> for PhysicsSystem {
                     comp
                 }
             };
-            phys_comp1.collided_objects.push(*e2);
+            phys_comp1.collided_objects.push(Collision {
+                other: *e2,
+                mtv: *mtv
+            });
             let phys_comp2 = match physics_storage.get_mut(*e2) {
                 None => {
                     panic!("Collision from unknown entity occured!");
@@ -145,7 +187,10 @@ impl<'a> System<'a> for PhysicsSystem {
                     comp
                 }
             };
-            phys_comp2.collided_objects.push(*e1);
+            phys_comp2.collided_objects.push(Collision {
+                other: *e1,
+                mtv: *mtv
+            });
         }
     }
 }
